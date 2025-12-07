@@ -1,0 +1,28 @@
+image: gitpod/workspace-full
+
+tasks:
+  - init: |
+      echo "🚀 Устанавливаем DFINITY SDK..."
+      sh -ci "$(curl -fsSL https://internetcomputer.org/install.sh)"
+      echo 'export PATH="$HOME/bin:$PATH"' >> ~/.bashrc
+      source ~/.bashrc
+      dfx --version
+      echo "✅ DFX установлен"
+
+      echo "📦 Устанавливаем зависимости..."
+      cd frontend && npm install && cd ..
+      echo "⚡ Окружение ICP готово!"
+
+  - command: |
+      echo ""
+      echo "💡 Основные команды для деплоя ICP:"
+      echo "1. dfx identity new myid"
+      echo "2. dfx identity get-principal"
+      echo "3. dfx deploy --network ic"
+      echo "4. dfx canister status --network ic"
+      echo ""
+      echo "🚀 Введите команды в терминале ниже."
+
+vscode:
+  extensions:
+    - dfinity-foundation.vscode-motoko
