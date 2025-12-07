@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "canisters": {
+    "land_canister": { "main": "backend/main.mo", "type": "motoko" },
+    "cyber_token_canister": { "main": "backend/cyber_token.mo", "type": "motoko" },
+    "marketplace_canister": { "main": "backend/marketplace.mo", "type": "motoko" },
+    "governance_canister": { "main": "backend/governance.mo", "type": "motoko" },
+    "asset_canister": { "main": "backend/asset.mo", "type": "motoko" }
+  },
+  "defaults": { "build": { "packtool": "" } },
+  "networks": {
+    "local": { "bind": "127.0.0.1:8000", "type": "ephemeral" },
+    "ic": { "type": "persistent" }
+  }
+}
