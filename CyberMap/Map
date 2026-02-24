@@ -1,1 +1,224 @@
+import React, { useRef, useEffect, useState } from 'react';
+import { useActor } from '../hooks/useActor';
+import { useQuery } from '@tanstack/react-query';
+import type { LandData } from '@/backend';
+import { X } from 'lucide-react';
+import { useInternetIdentity } from '../hooks/useInternetIdentity';
 
+interface MapViewProps {
+  landData: LandData;
+  onClose: () => void;
+}
+
+declare global {
+  interface Window {
+    maptalks: any;
+  }
+}
+
+const MapView: React.FC<MapViewProps> = ({ landData, onClose }) => {
+  const mapContainerRef = useRef<HTMLDivElement>(null);
+  const mapRef = useRef<any>(null);
+  const markersRef = useRef<any[]>([]);
+  const hasAnimated = useRef(false); 
+  const [maptalksSdkLoaded, setMaptalksSdkLoaded] = useState(false);
+  const [imageLoaded, setImageLoaded] = useState(false);
+  const { actor } = useActor();
+  const { identity } = useInternetIdentity();
+
+  // 1. ЗАЩИТА ОТ ICP ОШИБОК: Если запрос падает, lands будет пустым массивом [], а не undefined.
+  const { data: lands = [] } = useQuery<LandData[]>({
+    queryKey: ['landData'],
+    queryFn: async () => {
+      if (!actor) throw new Error('Actor not initialized');
+      return actor.getLandData();
+    },
+    enabled: !!actor,
+    retry: 1 // Не мучаем сеть, если канистра лежит
+  });
+
+  const userPrincipal = identity?.getPrincipal().toString();
+
+  // Вычисляем координаты, только если земли реально прилетели
+  const ownerLand = lands.find((l) => l.principal?.toString() === userPrincipal);
+  const targetX = ownerLand ? 1028 + (ownerLand.coordinates.lon / 180) * 1028 : null;
+  const targetY = ownerLand ? 1028 + (ownerLand.coordinates.lat / 90) * 1028 : null;
+
+  // --- БЛОК ЗАГРУЗКИ СКРИПТОВ ---
+  useEffect(() => {
+    const loadMaptalks = async () => {
+      if (window.maptalks) {
+        setMaptalksSdkLoaded(true);
+        return;
+      }
+      const cssLink = document.createElement('link');
+      cssLink.rel = 'stylesheet';
+      cssLink.href = 'https://cdn.jsdelivr.net/npm/maptalks@1.0.0-rc.28/dist/maptalks.css';
+      document.head.appendChild(cssLink);
+
+      const script = document.createElement('script');
+      script.src = 'https://cdn.jsdelivr.net/npm/maptalks@1.0.0-rc.28/dist/maptalks.min.js';
+      script.async = false;
+      script.onload = () => {
+        setTimeout(() => setMaptalksSdkLoaded(true), 100);
+      };
+      document.head.appendChild(script);
+    };
+    loadMaptalks();
+  }, []);
+
+  // --- ПРЕДЗАГРУЗКА ИЗОБРАЖЕНИЯ ---
+  useEffect(() => {
+    const img = new Image();
+    img.onload = () => setImageLoaded(true);
+    img.onerror = () => setImageLoaded(true); // Пропускаем дальше даже при ошибке картинки
+    img.src = 'https://raw.githubusercontent.com/dobr312/cyberland/main/CyberMap/IMG_0133.webp';
+  }, []);
+
+  const getBiomeColor = (biome: string): string => {
+    switch (biome) {
+      case 'MYTHIC_VOID': return '#9933FF';
+      case 'MYTHIC_AETHER': return '#00FFFF';
+      case 'ISLAND_ARCHIPELAGO': return '#00aaff';
+      case 'FOREST_VALLEY': return '#00ff41';
+      case 'SNOW_PEAK': return '#ffffff';
+      case 'DESERT_DUNE': return '#FF8800';
+      case 'VOLCANIC_CRAG': return '#ff3300';
+      default: return '#ffffff';
+    }
+  };
+
+  // --- ИНИЦИАЛИЗАЦИЯ КАРТЫ ---
+  useEffect(() => {
+    if (mapRef.current) return; // Защита от двойного рендера
+    if (!maptalksSdkLoaded || !window.maptalks || !mapContainerRef.current || !imageLoaded) return;
+
+    // 2. ИСПРАВЛЕННЫЙ ЗУМ: Расширили массив разрешений (теперь доступны зумы от 0 до 8)
+    const map = new window.maptalks.Map(mapContainerRef.current, {
+      center: [1028, -1028],
+      zoom: 1, // Безопасный стартовый зум
+      minZoom: 0, 
+      maxZoom: 8,
+      pitch: 0,
+      bearing: 0,
+      spatialReference: {
+        projection: 'identity',
+        resolutions: [64, 32, 16, 8, 4, 2, 1, 0.5, 0.25], 
+        fullExtent: { top: 0, right: 2056, bottom: -2056, left: 0 },
+      },
+      maxExtent: new window.maptalks.Extent(0, -2056, 2056, 0),
+      panLimit: true,
+      panLimitViscosity: 0.1,
+      dragRotate: false,
+      dragPitch: false,
+    });
+
+    const imageLayer = new window.maptalks.ImageLayer('images', [
+      {
+        url: 'https://raw.githubusercontent.com/dobr312/cyberland/main/CyberMap/IMG_0133.webp',
+        extent: [0, -2056, 2056, 0],
+      },
+    ]);
+    imageLayer.addTo(map);
+
+    // 3. АВТОМАТИЧЕСКИЙ ФИТИНГ: Пусть Maptalks сам подгоняет карту под экран при загрузке
+    map.on('load', () => {
+      const extent = map.getMaxExtent();
+      map.fitExtent(extent, 0); 
+    });
+
+    // Рисуем неон (отработает, только если земли успешно загрузились)
+    const markers: any[] = [];
+    lands.forEach((land) => {
+      const isOwner = land.principal?.toString() === userPrincipal;
+      const biomeColor = getBiomeColor(land.biome);
+      const mapX = 1028 + (land.coordinates.lon / 180) * 1028;
+      const mapY = 1028 + (land.coordinates.lat / 90) * 1028;
+
+      const beamWidth = isOwner ? 2.5 : 0.8;
+      const beamHeight = 150;
+      const opacity = isOwner ? 1.0 : 0.3;
+
+      const rayHTML = `
+        <div style="
+          width: ${beamWidth}px;
+          height: ${beamHeight}px;
+          background: linear-gradient(to top, ${biomeColor}, transparent);
+          opacity: ${opacity};
+          box-shadow: 0 0 ${beamWidth * 4}px ${biomeColor}, 0 0 ${beamWidth * 8}px ${biomeColor};
+          transform: translateX(-50%);
+          pointer-events: none;
+        "></div>
+      `;
+
+      const marker = new window.maptalks.ui.UIMarker([mapX, -mapY], {
+        content: rayHTML,
+        verticalAlignment: 'bottom',
+        eventsPropagation: false,
+      });
+      markers.push(marker);
+      marker.addTo(map);
+    });
+
+    markersRef.current = markers;
+    mapRef.current = map;
+
+    return () => {
+      if (markersRef.current.length > 0) {
+        markersRef.current.forEach(marker => marker.remove());
+        markersRef.current = [];
+      }
+      if (mapRef.current) {
+        mapRef.current.remove();
+        mapRef.current = null;
+      }
+    };
+  }, [maptalksSdkLoaded, lands, userPrincipal, imageLoaded]);
+
+  // --- АНИМАЦИЯ ПОДЛЕТА ---
+  useEffect(() => {
+    // Сработает только если есть координаты (targetX/Y) и карта готова
+    if (mapRef.current && targetX && targetY && !hasAnimated.current) {
+      hasAnimated.current = true;
+      setTimeout(() => {
+        mapRef.current.animateTo({
+          center: [targetX, -targetY],
+          zoom: 5, // Целевой зум для подлета (скорректирован под новые resolutions)
+        }, {
+          duration: 3500,
+          easing: 'out',
+        });
+      }, 600);
+    }
+  }, [targetX, targetY]); // Зависимости обновлены
+
+  // Экран загрузки показываем только пока грузится скрипт или картинка (земли не ждем!)
+  if (!maptalksSdkLoaded || !imageLoaded) {
+    return (
+      <div className="fixed inset-0 z-[9999] bg-black flex items-center justify-center">
+        <div className="text-[#00ffff] text-xl animate-pulse font-orbitron">
+          {!maptalksSdkLoaded ? 'Загрузка библиотеки Maptalks...' : 'Загрузка карты...'}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100dvh', zIndex: 1000, background: '#000', touchAction: 'none' }}>
+      <button 
+        onClick={onClose}
+        className="absolute top-10 right-10 glassmorphism px-6 py-3 rounded-lg border border-white/10 hover:border-[#00ffff]/50 hover:bg-white/5 transition-all duration-300 group"
+        style={{ zIndex: 100, boxShadow: '0 0 20px rgba(0, 255, 255, 0.3), inset 0 0 20px rgba(0, 255, 255, 0.1)' }}
+      >
+        <X className="w-6 h-6 text-[#00ffff] group-hover:text-white transition-colors" />
+      </button>
+      
+      <div 
+        ref={mapContainerRef}
+        style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100dvh', zIndex: 1, background: '#000', touchAction: 'none' }}
+      />
+    </div>
+  );
+};
+
+export default MapView;
